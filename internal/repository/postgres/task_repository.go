@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,12 +22,21 @@ func New(pool *pgxpool.Pool) *Repository {
 
 func (r *Repository) Create(ctx context.Context, task *taskdomain.Task) (*taskdomain.Task, error) {
 	const query = `
-		INSERT INTO tasks (title, description, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, title, description, status, created_at, updated_at
-	`
+	       INSERT INTO tasks (title, description, status, created_at, updated_at, periodicity, scheduled_for)
+	       VALUES ($1, $2, $3, $4, $5, $6, $7)
+	       RETURNING id, title, description, status, created_at, updated_at, periodicity, scheduled_for
+       `
 
-	row := r.pool.QueryRow(ctx, query, task.Title, task.Description, task.Status, task.CreatedAt, task.UpdatedAt)
+	var periodicityJSON any
+	if task.Periodicity != nil {
+		b, err := json.Marshal(task.Periodicity)
+		if err != nil {
+			return nil, err
+		}
+		periodicityJSON = b
+	}
+
+	row := r.pool.QueryRow(ctx, query, task.Title, task.Description, task.Status, task.CreatedAt, task.UpdatedAt, periodicityJSON, task.ScheduledFor)
 	created, err := scanTask(row)
 	if err != nil {
 		return nil, err
@@ -36,10 +47,10 @@ func (r *Repository) Create(ctx context.Context, task *taskdomain.Task) (*taskdo
 
 func (r *Repository) GetByID(ctx context.Context, id int64) (*taskdomain.Task, error) {
 	const query = `
-		SELECT id, title, description, status, created_at, updated_at
-		FROM tasks
-		WHERE id = $1
-	`
+	       SELECT id, title, description, status, created_at, updated_at, periodicity, scheduled_for
+	       FROM tasks
+	       WHERE id = $1
+       `
 
 	row := r.pool.QueryRow(ctx, query, id)
 	found, err := scanTask(row)
@@ -54,18 +65,46 @@ func (r *Repository) GetByID(ctx context.Context, id int64) (*taskdomain.Task, e
 	return found, nil
 }
 
+// FindByTemplateAndDate ищет задачу-экземпляр по шаблону (id) и дате
+func (r *Repository) FindByTemplateAndDate(ctx context.Context, templateID int64, date string) (*taskdomain.Task, error) {
+	const query = `
+	       SELECT id, title, description, status, created_at, updated_at, periodicity, scheduled_for
+	       FROM tasks
+	       WHERE scheduled_for = $1 AND id != $2
+       `
+	row := r.pool.QueryRow(ctx, query, date, templateID)
+	found, err := scanTask(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return found, nil
+}
+
 func (r *Repository) Update(ctx context.Context, task *taskdomain.Task) (*taskdomain.Task, error) {
 	const query = `
 		UPDATE tasks
 		SET title = $1,
 			description = $2,
 			status = $3,
-			updated_at = $4
-		WHERE id = $5
-		RETURNING id, title, description, status, created_at, updated_at
+			updated_at = $4,
+			periodicity = $5
+		WHERE id = $6
+		RETURNING id, title, description, status, created_at, updated_at, periodicity
 	`
 
-	row := r.pool.QueryRow(ctx, query, task.Title, task.Description, task.Status, task.UpdatedAt, task.ID)
+	var periodicityJSON any
+	if task.Periodicity != nil {
+		b, err := json.Marshal(task.Periodicity)
+		if err != nil {
+			return nil, err
+		}
+		periodicityJSON = b
+	}
+
+	row := r.pool.QueryRow(ctx, query, task.Title, task.Description, task.Status, task.UpdatedAt, periodicityJSON, task.ID)
 	updated, err := scanTask(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -95,10 +134,10 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 
 func (r *Repository) List(ctx context.Context) ([]taskdomain.Task, error) {
 	const query = `
-		SELECT id, title, description, status, created_at, updated_at
-		FROM tasks
-		ORDER BY id DESC
-	`
+	       SELECT id, title, description, status, created_at, updated_at, periodicity, scheduled_for
+	       FROM tasks
+	       ORDER BY id DESC
+       `
 
 	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
@@ -129,8 +168,10 @@ type taskScanner interface {
 
 func scanTask(scanner taskScanner) (*taskdomain.Task, error) {
 	var (
-		task   taskdomain.Task
-		status string
+		task            taskdomain.Task
+		status          string
+		periodicityJSON *string
+		scheduledFor    *time.Time
 	)
 
 	if err := scanner.Scan(
@@ -140,11 +181,21 @@ func scanTask(scanner taskScanner) (*taskdomain.Task, error) {
 		&status,
 		&task.CreatedAt,
 		&task.UpdatedAt,
+		&periodicityJSON,
+		&scheduledFor,
 	); err != nil {
 		return nil, err
 	}
 
 	task.Status = taskdomain.Status(status)
+
+	if periodicityJSON != nil {
+		var p taskdomain.Periodicity
+		if err := json.Unmarshal([]byte(*periodicityJSON), &p); err == nil {
+			task.Periodicity = &p
+		}
+	}
+	task.ScheduledFor = scheduledFor
 
 	return &task, nil
 }

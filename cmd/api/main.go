@@ -41,6 +41,8 @@ func main() {
 	docsHandler := swaggerdocs.NewHandler()
 	router := transporthttp.NewRouter(taskHandler, docsHandler)
 
+	//go task.PeriodicWorker(ctx, taskRepo, time.Minute)
+
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           router,
