@@ -31,7 +31,13 @@ func PeriodicWorker(ctx context.Context, repo taskusecase.Repository, interval t
 				if t.Periodicity == nil {
 					continue
 				}
-				strat, err := periodicity.Factory(t.Periodicity)
+				params := &periodicity.Params{
+					Type:    periodicity.PeriodicityTypeRRule,
+					RRule:   t.Periodicity.RRule,
+					ExDates: t.Periodicity.ExDates,
+					RDates:  t.Periodicity.RDates,
+				}
+				strat, err := periodicity.Factory(params)
 				if err != nil {
 					log.Printf("periodic worker: strategy error: %v", err)
 					continue
@@ -58,6 +64,8 @@ func PeriodicWorker(ctx context.Context, repo taskusecase.Repository, interval t
 					newTask := t // копируем шаблон
 					newTask.ID = 0
 					newTask.Status = taskdomain.StatusNew
+					parentID := t.ID
+					newTask.ParentID = &parentID
 					newTask.Periodicity = nil // экземпляр не должен быть периодичным
 					newTask.ScheduledFor = &scheduledFor
 					newTask.CreatedAt = time.Now().UTC()

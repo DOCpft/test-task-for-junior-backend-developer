@@ -16,6 +16,7 @@ import (
 	swaggerdocs "example.com/taskservice/internal/transport/http/docs"
 	httphandlers "example.com/taskservice/internal/transport/http/handlers"
 	"example.com/taskservice/internal/usecase/task"
+	scheduler "example.com/taskservice/internal/usecase/task/scheduler"
 )
 
 func main() {
@@ -41,7 +42,7 @@ func main() {
 	docsHandler := swaggerdocs.NewHandler()
 	router := transporthttp.NewRouter(taskHandler, docsHandler)
 
-	//go task.PeriodicWorker(ctx, taskRepo, time.Minute)
+	go scheduler.PeriodicWorker(ctx, taskRepo, time.Minute)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

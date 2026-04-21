@@ -21,6 +21,7 @@ type Task struct {
 	UpdatedAt    time.Time    `json:"updated_at"`
 	Periodicity  *Periodicity `json:"periodicity,omitempty"`   // Настройки периодичности (если есть)
 	ScheduledFor *time.Time   `json:"scheduled_for,omitempty"` // Дата экземпляра задачи (если это автосозданная задача)
+	ParentID     *int64       `json:"parent_id,omitempty"`     // ID родительской задачи, если это экземпляр
 }
 
 // Periodicity описывает правила повторения задачи по стандарту RFC 5545 (RRule)
