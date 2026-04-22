@@ -50,12 +50,13 @@ func (uc *ProcessRecurringTasksUseCase) processTask(ctx context.Context, t *task
     }
 
     // Получаем стратегию
-    params := &periodicity.Params{
-        Type:    periodicity.PeriodicityTypeRRule,
-        RRule:   t.Periodicity.RRule,
-        ExDates: t.Periodicity.ExDates,
-        RDates:  t.Periodicity.RDates,
-    }
+	params := &periodicity.Params{
+		Type:    periodicity.PeriodicityTypeRRule,
+		RRule:   t.Periodicity.RRule,
+		ExDates: t.Periodicity.ExDates,
+		RDates:  t.Periodicity.RDates,
+		Dtstart: t.CreatedAt, // <-- важно!
+	}
     strat, err := periodicity.Factory(params)
     if err != nil {
         return err

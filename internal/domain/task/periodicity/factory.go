@@ -22,6 +22,7 @@ type Params struct {
 	RDates  []string
 	Cron    string
 	Fixed   time.Duration
+	Dtstart time.Time // <-- новое поле
 }
 
 // Factory создает нужную стратегию по типу периодичности
@@ -32,16 +33,10 @@ func Factory(p *Params) (Strategy, error) {
 
 	switch p.Type {
 	case PeriodicityTypeRRule:
-		return &RRuleStrategy{
-			RRule:   p.RRule,
-			ExDates: p.ExDates,
-			RDates:  p.RDates,
-		}, nil
+		return NewRRuleStrategy(p.RRule, p.ExDates, p.RDates, p.Dtstart)
 	case PeriodicityTypeCron:
-		// Здесь можно добавить CronStrategy
 		return nil, fmt.Errorf("cron strategy not implemented yet")
 	case PeriodicityTypeFixed:
-		// Здесь можно добавить FixedStrategy
 		return nil, fmt.Errorf("fixed strategy not implemented yet")
 	default:
 		return nil, fmt.Errorf("unsupported periodicity type: %s", p.Type)
