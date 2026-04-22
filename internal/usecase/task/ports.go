@@ -2,7 +2,7 @@ package task
 
 import (
 	"context"
-
+	"time"
 
 	taskdomain "example.com/taskservice/internal/domain/task"
 )
@@ -15,6 +15,7 @@ type Repository interface {
 	List(ctx context.Context) ([]taskdomain.Task, error)
 	ListPeriodic(ctx context.Context) ([]*taskdomain.Task, error)
 	FindByTemplateAndDate(ctx context.Context, templateID int64, date string) (*taskdomain.Task, error)
+	UpdateLastRunAt(ctx context.Context, id int64, lastRunAt *time.Time) error
 }
 
 type Usecase interface {

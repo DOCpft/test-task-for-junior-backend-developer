@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
-
+	"log"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -118,11 +118,17 @@ func (r *Repository) Update(ctx context.Context, task *taskdomain.Task) (*taskdo
 	return updated, nil
 }
 
-// func (r *Repository) UpdateLastRunAt(ctx context.Context, id uint, lastRunAt *time.Time) error {
-//     const query = `UPDATE tasks SET last_run_at = $1, updated_at = NOW() WHERE id = $2`
-//     _, err := r.pool.Exec(ctx, query, lastRunAt, id)
-//     return err
-// }
+func (r *Repository) UpdateLastRunAt(ctx context.Context, id int64, lastRunAt *time.Time) error {
+   const query = `UPDATE tasks SET last_run_at = $1, updated_at = NOW() WHERE id = $2`
+    log.Printf("[REPO] Updating last_run_at for task %d to %v", id, lastRunAt)
+    res, err := r.pool.Exec(ctx, query, lastRunAt, id)
+    if err != nil {
+        log.Printf("[REPO] UpdateLastRunAt error: %v", err)
+        return err
+    }
+    log.Printf("[REPO] Rows affected: %d", res.RowsAffected())
+    return nil
+}
 
 func (r *Repository) Delete(ctx context.Context, id int64) error {
 	const query = `DELETE FROM tasks WHERE id = $1`
