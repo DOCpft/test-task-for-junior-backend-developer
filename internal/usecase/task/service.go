@@ -36,6 +36,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*taskdomain.Ta
 	now := s.now()
 	model.CreatedAt = now
 	model.UpdatedAt = now
+	if normalized.Periodicity != nil {
+		model.LastRunAt = &now
+	}
 
 	created, err := s.repo.Create(ctx, model)
 	if err != nil {

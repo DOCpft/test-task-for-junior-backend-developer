@@ -2,8 +2,12 @@ package task
 
 import (
 	"context"
+	"errors"
 	"log"
+	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	taskdomain "example.com/taskservice/internal/domain/task"
 	"example.com/taskservice/internal/domain/task/periodicity"
@@ -13,71 +17,121 @@ import (
 // PeriodicWorker отвечает за автосоздание задач по расписанию
 // Можно запускать как отдельную горутину
 func PeriodicWorker(ctx context.Context, repo taskusecase.Repository, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	nextRun := time.Now().Add(interval)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
-			// Получаем все задачи с периодичностью
-			tasks, err := repo.List(ctx)
-			if err != nil {
-				log.Printf("periodic worker: list error: %v", err)
-				continue
+		default:
+			now := time.Now()
+			if now.Before(nextRun) {
+				sleepDuration := nextRun.Sub(now)
+				select {
+				case <-time.After(sleepDuration):
+				case <-ctx.Done():
+					return
+				}
 			}
-			for _, t := range tasks {
-				if t.Periodicity == nil {
-					continue
-				}
-				params := &periodicity.Params{
-					Type:    periodicity.PeriodicityTypeRRule,
-					RRule:   t.Periodicity.RRule,
-					ExDates: t.Periodicity.ExDates,
-					RDates:  t.Periodicity.RDates,
-				}
-				strat, err := periodicity.Factory(params)
-				if err != nil {
-					log.Printf("periodic worker: strategy error: %v", err)
-					continue
-				}
-				// Например, ищем даты на ближайшие сутки
-				occurs, err := strat.Occurrences(now, now.Add(24*time.Hour))
-				if err != nil {
-					log.Printf("periodic worker: occurrences error: %v", err)
-					continue
-				}
-				for _, occ := range occurs {
-					dateStr := occ.Format("2006-01-02")
-					existing, err := repo.FindByTemplateAndDate(ctx, t.ID, dateStr)
-					if err != nil {
-						log.Printf("periodic worker: find error: %v", err)
-						continue
-					}
-					if existing != nil {
-						log.Printf("periodic worker: task already exists for template %d on date %s", t.ID, dateStr)
-						continue // Уже есть задача на эту дату
-					}
-					// Создать новую задачу-экземпляр
-					scheduledFor := occ
-					newTask := t // копируем шаблон
-					newTask.ID = 0
-					newTask.Status = taskdomain.StatusNew
-					parentID := t.ID
-					newTask.ParentID = &parentID
-					newTask.Periodicity = nil // экземпляр не должен быть периодичным
-					newTask.ScheduledFor = &scheduledFor
-					newTask.CreatedAt = time.Now().UTC()
-					newTask.UpdatedAt = newTask.CreatedAt
-					_, err = repo.Create(ctx, &newTask)
 
-					if err != nil {
-						log.Printf("periodic worker: create error: %v", err)
-					}
-					log.Printf("periodic worker: created task from template %d for date %s", t.ID, dateStr)
-				}
+			// Обработка
+			processPeriodicTasks(ctx, repo)
+
+			// Рассчитываем следующее время запуска
+			nextRun = nextRun.Add(interval)
+			if nextRun.Before(time.Now()) {
+				// Если отстали, сбрасываем на следующий интервал
+				nextRun = time.Now().Add(interval)
 			}
 		}
 	}
+}
+
+func processPeriodicTasks(ctx context.Context, repo taskusecase.Repository) {
+	now := time.Now().UTC()
+
+	// Получаем только периодические задачи
+	tasks, err := repo.ListPeriodic(ctx)
+	if err != nil {
+		log.Printf("periodic worker: list periodic error: %v", err)
+		return
+	}
+	for _, t := range tasks {
+		if t.LastRunAt == nil {
+			// Инициализируем LastRunAt, если не установлено
+			t.LastRunAt = &t.CreatedAt
+			_, err := repo.Update(ctx, t)
+			if err != nil {
+				log.Printf("periodic worker: update last_run_at error: %v", err)
+				continue
+			}
+		}
+
+		params := &periodicity.Params{
+			Type:    periodicity.PeriodicityTypeRRule,
+			RRule:   t.Periodicity.RRule,
+			ExDates: t.Periodicity.ExDates,
+			RDates:  t.Periodicity.RDates,
+		}
+		strat, err := periodicity.Factory(params)
+		if err != nil {
+			log.Printf("periodic worker: strategy error: %v", err)
+			continue
+		}
+
+		// Вычисляем следующую дату после последнего запуска
+		next, err := strat.NextAfter(*t.LastRunAt)
+		if err != nil {
+			log.Printf("periodic worker: next after error: %v", err)
+			continue
+		}
+		if next.IsZero() {
+			// Нет больше повторений
+			continue
+		}
+
+		if next.After(now) {
+			// Ещё не время
+			continue
+		}
+
+		// Создаём экземпляр на дату next
+		scheduledFor := next
+		newTask := *t // копируем шаблон
+		newTask.ID = 0
+		newTask.Status = taskdomain.StatusNew
+		parentID := t.ID
+		newTask.ParentID = &parentID
+		newTask.Periodicity = nil // экземпляр не должен быть периодичным
+		newTask.ScheduledFor = &scheduledFor
+		newTask.LastRunAt = nil // экземпляр не имеет last_run_at
+		newTask.CreatedAt = time.Now().UTC()
+		newTask.UpdatedAt = newTask.CreatedAt
+
+		_, err = repo.Create(ctx, &newTask)
+		if err != nil {
+			// Игнорируем ошибку дубликата
+			if !isDuplicateError(err) {
+				log.Printf("periodic worker: create error: %v", err)
+			}
+			// Даже если дубликат, обновляем LastRunAt
+		} else {
+			log.Printf("periodic worker: created task from template %d for date %s", t.ID, scheduledFor.Format("2006-01-02"))
+		}
+
+		// Обновляем LastRunAt на next
+		t.LastRunAt = &next
+		_, err = repo.Update(ctx, t)
+		if err != nil {
+			log.Printf("periodic worker: update last_run_at error: %v", err)
+		}
+	}
+}
+
+func isDuplicateError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505" // unique_violation
+	}
+	return strings.Contains(err.Error(), "duplicate key value")
 }
